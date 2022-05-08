@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -49,8 +50,8 @@ type (
 		ctx context.Context
 
 		size, lastSize uint64
-
-		info *Info
+		retry_size     uint64
+		info           *Info
 
 		chunks []*Chunk
 
@@ -129,11 +130,12 @@ func (d *Download) Init() (err error) {
 
 	// Set default client.
 	if d.Client == nil {
-		///log.Printf("start init download  ===23==>")
+		log.Printf("start download...")
 		retryClient := retryablehttp.NewClient()
+		retryClient.Logger = nil
 		retryClient.RetryMax = 10
 		d.Client = retryClient.StandardClient()
-		///		d.Client = DefaultClient
+		// d.Client = DefaultClient
 	}
 
 	// Set default context.
@@ -267,6 +269,9 @@ func (d *Download) TotalSize() uint64 {
 func (d *Download) Size() uint64 {
 	return atomic.LoadUint64(&d.size)
 }
+func (d *Download) RetrySize() uint64 {
+	return atomic.LoadUint64(&d.retry_size)
+}
 
 // Speed returns download speed.
 func (d *Download) Speed() uint64 {
@@ -293,6 +298,10 @@ func (d *Download) Write(b []byte) (int, error) {
 	n := len(b)
 	atomic.AddUint64(&d.size, uint64(n))
 	return n, nil
+}
+
+func (d *Download) AddRetrySize(size int64) {
+	atomic.AddUint64(&d.retry_size, uint64(size))
 }
 
 // IsRangeable returns file server partial content support state.
@@ -354,38 +363,57 @@ func (d *Download) Path() string {
 }
 
 // DownloadChunk downloads a file chunk.
-func (d *Download) DownloadChunk(c *Chunk, dest io.Writer) error {
+func (d *Download) DownloadChunk(c *Chunk, dest *OffsetWriter) error {
+	retry, err := d.do_DownloadChunk(c, dest)
+
+	if !retry {
+		return err
+	}
+	for index := 0; index < 3; index++ {
+		log.Printf("error %v. retry %v/3", err, index+1)
+		retry, err = d.do_DownloadChunk(c, dest)
+		if err == nil {
+			break
+		}
+	}
+	return err
+}
+func (d *Download) do_DownloadChunk(c *Chunk, dest *OffsetWriter) (retry bool, err error) {
 
 	var (
-		err error
 		req *http.Request
 		res *http.Response
 	)
+	retry = false
 
 	if req, err = NewRequest(d.ctx, "GET", d.URL, d.Header); err != nil {
-		return err
+		return
 	}
 
 	contentRange := fmt.Sprintf("bytes=%d-%d", c.Start, c.End)
 	req.Header.Set("Range", contentRange)
-
 	if res, err = d.Client.Do(req); err != nil {
-		return err
+		return
 	}
-
 	// Verify the length
 	if res.ContentLength != int64(c.End-c.Start+1) {
-		return fmt.Errorf(
+		err = fmt.Errorf(
 			"Range request returned invalid Content-Length: %d however the range was: %s",
 			res.ContentLength, contentRange,
 		)
+		return
 	}
 
 	defer res.Body.Close()
-
-	_, err = io.CopyN(dest, io.TeeReader(res.Body, d), res.ContentLength)
-
-	return err
+	var written_size int64
+	written_size, err = io.CopyN(dest, io.TeeReader(res.Body, d), res.ContentLength)
+	if err != nil {
+		log.Printf("copy error: %v, size:%v, content-length:%v", err, written_size, res.ContentLength)
+		retry = true
+		dest.Rewind(written_size)
+		d.AddRetrySize(written_size)
+	}
+	return
 }
 
 // NewDownload returns new *Download with context.
