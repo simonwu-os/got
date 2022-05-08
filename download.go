@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/hashicorp/go-retryablehttp"
 )
 
 type (
@@ -127,7 +129,11 @@ func (d *Download) Init() (err error) {
 
 	// Set default client.
 	if d.Client == nil {
-		d.Client = DefaultClient
+		///log.Printf("start init download  ===23==>")
+		retryClient := retryablehttp.NewClient()
+		retryClient.RetryMax = 10
+		d.Client = retryClient.StandardClient()
+		///		d.Client = DefaultClient
 	}
 
 	// Set default context.
