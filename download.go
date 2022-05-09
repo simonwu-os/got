@@ -184,6 +184,24 @@ func (d *Download) Init() (err error) {
 	return nil
 }
 
+func TouchFile(fileName string) error {
+	_, err := os.Stat(fileName)
+	if os.IsNotExist(err) {
+		file, err := os.Create(fileName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer file.Close()
+	} else {
+		currentTime := time.Now().Local()
+		err = os.Chtimes(fileName, currentTime, currentTime)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+	return err
+}
+
 // Start downloads the file chunks, and merges them.
 // Must be called only after init
 func (d *Download) Start() (err error) {
@@ -198,12 +216,25 @@ func (d *Download) Start() (err error) {
 	}
 
 	// Otherwise there are always at least 2 chunks
+	target_file := d.Path()
 
-	file, err := os.Create(d.Path())
+	////downloading file using .cdl postfix. so client can detect the downloading state easily.
+	downloading_file := target_file + ".cdl"
+	file, err := os.Create(downloading_file)
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+
+	defer func() {
+		file.Close()
+		if err != nil {
+			os.Remove(downloading_file)
+			download_failed := target_file + ".err"
+			TouchFile(download_failed)
+		} else {
+			err = os.Rename(downloading_file, target_file)
+		}
+	}()
 
 	// Allocate the file completely so that we can write concurrently
 	file.Truncate(int64(d.TotalSize()))
