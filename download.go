@@ -171,6 +171,12 @@ func (d *Download) Init() (err error) {
 	}
 
 	chunksLen := d.info.Size / d.ChunkSize
+  ///added by simon wu
+  ///fix if chunksLen = 0, then the result file content is not valid.
+  if chunksLen == 0 {
+    chunksLen += 1
+  }
+  ///end of added
 	d.chunks = make([]*Chunk, 0, chunksLen)
 
 	// Set chunk ranges.
@@ -391,6 +397,9 @@ func (d *Download) RetrySize() uint64 {
 	return atomic.LoadUint64(&d.retry_size)
 }
 
+func (d *Download) TotalDownloadSize() uint64 {
+	return d.TotalSize() + d.RetrySize()
+}
 
 func (d *Download) AddRetrySize(size int64) {
 	atomic.AddUint64(&d.retry_size, uint64(size))
