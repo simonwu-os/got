@@ -115,8 +115,11 @@ func run(ctx context.Context, c *cli.Context) error {
 		// it's working fine with $COLUMNS >= 47
 		p.Width = getWidth() - 55
 
-		total_size := d.TotalSize() + d.RetrySize()
+                ///added by simon
+		total_size := d.TotalDownloadSize()
+                ///end of added.
 
+                ///replaced by simon for d.TotalSize()
 		perc, err := progress.GetPercentage(float64(d.Size()), float64(total_size))
 		if err != nil {
 			perc = 100
@@ -134,7 +137,7 @@ func run(ctx context.Context, c *cli.Context) error {
 			perc,
 			bar,
 			humanize.Bytes(d.Size()),
-			humanize.Bytes(total_size),
+			humanize.Bytes(total_size), ///replaced by simon for d.TotalSize()
 			humanize.Bytes(d.Speed()),
 			ansi.ClearRight(),
 		)

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,10 +13,12 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/hashicorp/go-retryablehttp"
 )
 
+///added by simon wu
+import "log"
+import "github.com/hashicorp/go-retryablehttp"
+///end of added
 type (
 
 	// Info holds downloadable file info.
@@ -50,7 +51,9 @@ type (
 		ctx context.Context
 
 		size, lastSize uint64
+///added by simon wu
 		retry_size     uint64
+///end of added
 		info           *Info
 
 		chunks []*Chunk
@@ -92,7 +95,8 @@ func (d *Download) GetInfoOrDownload() (*Info, error) {
 	// Set content disposition non trusted name
 	d.unsafeName = res.Header.Get("content-disposition")
 
-	if dest, err = os.Create(d.Path()); err != nil {
+	///modified by simon wu. replace Path to PathForDownloading
+	if dest, err = os.Create(d.PathForDownloading()); err != nil {
 		return &Info{}, err
 	}
 	defer dest.Close()
@@ -130,12 +134,15 @@ func (d *Download) Init() (err error) {
 
 	// Set default client.
 	if d.Client == nil {
+///replaced by simon wu
 		log.Printf("start download...")
 		retryClient := retryablehttp.NewClient()
 		retryClient.Logger = nil
 		retryClient.RetryMax = 10
 		d.Client = retryClient.StandardClient()
+///origin datas
 		// d.Client = DefaultClient
+///end of replaced
 	}
 
 	// Set default context.
@@ -184,24 +191,6 @@ func (d *Download) Init() (err error) {
 	return nil
 }
 
-func TouchFile(fileName string) error {
-	_, err := os.Stat(fileName)
-	if os.IsNotExist(err) {
-		file, err := os.Create(fileName)
-		if err != nil {
-			log.Fatal(err)
-		}
-		defer file.Close()
-	} else {
-		currentTime := time.Now().Local()
-		err = os.Chtimes(fileName, currentTime, currentTime)
-		if err != nil {
-			fmt.Println(err)
-		}
-	}
-	return err
-}
-
 // Start downloads the file chunks, and merges them.
 // Must be called only after init
 func (d *Download) Start() (err error) {
@@ -216,17 +205,14 @@ func (d *Download) Start() (err error) {
 	}
 
 	// Otherwise there are always at least 2 chunks
-	target_file := d.Path()
-
-	////downloading file using .cdl postfix. so client can detect the downloading state easily.
-	downloading_file := target_file + ".cdl"
-	file, err := os.Create(downloading_file)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		file.Close()
+	///replaced by simon wu
+	file, err := os.Create(d.PathForDownloading())
+	defer func(create_err error){
+		if create_err != nil {
+				return
+		}
+		downloading_file := d.PathForDownloading()
+		target_file := d.Path()
 		if err != nil {
 			os.Remove(downloading_file)
 			download_failed := target_file + ".err"
@@ -234,7 +220,15 @@ func (d *Download) Start() (err error) {
 		} else {
 			err = os.Rename(downloading_file, target_file)
 		}
-	}()
+	}(err)
+	///origin lines
+	///file, err := os.Create(d.Path())
+	///end of replaced
+
+  if err != nil {
+		return err
+	}
+	defer file.Close()
 
 	// Allocate the file completely so that we can write concurrently
 	file.Truncate(int64(d.TotalSize()))
@@ -300,9 +294,6 @@ func (d *Download) TotalSize() uint64 {
 func (d *Download) Size() uint64 {
 	return atomic.LoadUint64(&d.size)
 }
-func (d *Download) RetrySize() uint64 {
-	return atomic.LoadUint64(&d.retry_size)
-}
 
 // Speed returns download speed.
 func (d *Download) Speed() uint64 {
@@ -329,10 +320,6 @@ func (d *Download) Write(b []byte) (int, error) {
 	n := len(b)
 	atomic.AddUint64(&d.size, uint64(n))
 	return n, nil
-}
-
-func (d *Download) AddRetrySize(size int64) {
-	atomic.AddUint64(&d.retry_size, uint64(size))
 }
 
 // IsRangeable returns file server partial content support state.
@@ -393,58 +380,110 @@ func (d *Download) Path() string {
 	return d.path
 }
 
+///added by simon wu
+
+////downloading file using .cdl postfix. so client can detect the downloading state easily.
+func (d *Download) PathForDownloading() string {
+	return d.Path() + ".cdl"
+}
+
+func (d *Download) RetrySize() uint64 {
+	return atomic.LoadUint64(&d.retry_size)
+}
+
+
+func (d *Download) AddRetrySize(size int64) {
+	atomic.AddUint64(&d.retry_size, uint64(size))
+}
+
+
+func TouchFile(fileName string) error {
+	_, err := os.Stat(fileName)
+	if os.IsNotExist(err) {
+		file, err := os.Create(fileName)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer file.Close()
+	} else {
+		currentTime := time.Now().Local()
+		err = os.Chtimes(fileName, currentTime, currentTime)
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+	return err
+}
+
+
+///end of added
+
 // DownloadChunk downloads a file chunk.
-func (d *Download) DownloadChunk(c *Chunk, dest *OffsetWriter) error {
-	retry, err := d.do_DownloadChunk(c, dest)
+func (d *Download) DownloadChunk(c *Chunk, dest io.Writer) error {
+	retry := false
+	err := d.do_DownloadChunk(c, dest, &retry)
 
 	if !retry {
 		return err
 	}
 	for index := 0; index < 3; index++ {
 		log.Printf("error %v. retry %v/3", err, index+1)
-		retry, err = d.do_DownloadChunk(c, dest)
+		err = d.do_DownloadChunk(c, dest, &retry)
 		if err == nil {
 			break
 		}
 	}
 	return err
 }
-func (d *Download) do_DownloadChunk(c *Chunk, dest *OffsetWriter) (retry bool, err error) {
+
+func (d *Download) do_DownloadChunk(c *Chunk, dest io.Writer, retry * bool) error {
 
 	var (
+		err error
 		req *http.Request
 		res *http.Response
 	)
-	retry = false
+	///adde by simon
+	*retry = false
+	///end of added
 
 	if req, err = NewRequest(d.ctx, "GET", d.URL, d.Header); err != nil {
-		return
+		return err
 	}
 
 	contentRange := fmt.Sprintf("bytes=%d-%d", c.Start, c.End)
 	req.Header.Set("Range", contentRange)
+
 	if res, err = d.Client.Do(req); err != nil {
-		return
+		return err
 	}
+
 	// Verify the length
 	if res.ContentLength != int64(c.End-c.Start+1) {
-		err = fmt.Errorf(
+		return fmt.Errorf(
 			"Range request returned invalid Content-Length: %d however the range was: %s",
 			res.ContentLength, contentRange,
 		)
-		return
 	}
 
 	defer res.Body.Close()
+
+
+
+	///replaced by simon wu
 	var written_size int64
 	written_size, err = io.CopyN(dest, io.TeeReader(res.Body, d), res.ContentLength)
 	if err != nil {
 		log.Printf("copy error: %v, size:%v, content-length:%v", err, written_size, res.ContentLength)
-		retry = true
-		dest.Rewind(written_size)
+		*retry = true
+		target_dest := dest.(*OffsetWriter);
+		target_dest.Rewind(written_size)
 		d.AddRetrySize(written_size)
 	}
-	return
+	///origin lines
+	///_, err = io.CopyN(dest, io.TeeReader(res.Body, d), res.ContentLength)
+	/// end of replaced
+	return err
 }
 
 // NewDownload returns new *Download with context.
