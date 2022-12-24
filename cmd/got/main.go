@@ -245,8 +245,8 @@ func download(ctx context.Context, c *cli.Context, g *got.Got, url string) (err 
 	if url, err = getURL(url); err != nil {
 		return err
 	}
-
-	return g.Do(&got.Download{
+	///added by simon
+	d := &got.Download{
 		URL:         url,
 		Dir:         c.String("dir"),
 		Dest:        c.String("output"),
@@ -254,7 +254,23 @@ func download(ctx context.Context, c *cli.Context, g *got.Got, url string) (err 
 		Interval:    150,
 		ChunkSize:   c.Uint64("size"),
 		Concurrency: c.Uint("concurrency"),
-	})
+	}
+	///end of added
+	err = g.Do(d)
+
+	///added by simon
+	if err != nil {
+		return
+	}
+
+	fmt.Print(ansi.ClearLine())
+	seconds := d.TotalCost().Seconds()
+
+	speed_kb := humanize.Bytes(d.AvgSpeed())
+	fmt.Printf("finish downloading. It spent %.1f seconds at avg speed: %s/s\n",seconds, speed_kb)
+	///end of added
+
+	return
 }
 
 func getURL(URL string) (string, error) {
